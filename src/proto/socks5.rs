@@ -3,8 +3,6 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use bytes::{BufMut, BytesMut};
-use futures::AsyncWrite;
-use tokio::io::AsyncWriteExt;
 
 use crate::proto::WriteBuf;
 

@@ -1,21 +1,21 @@
+Postcard, a proxy tool over HTTP/2.
+=============
+
+## Summary
+
+`client` will listen as socks5 proxy, then forward data to `server`.
+
+The `client` communicate to `server` with `HTTP/2` which over encrypted stream -- `Snowstorm`.
 
 
 
-```bash
+```shell
+# gen keys
+cargo run --bin key-gen
 
-mkdir tls
+# run client
+cargo run --bin pc-client -- --host 0.0.0.0:1089 --server 127.0.0.1:8080 --private-key keys/private_key.bin --public-key keys/public_key.bin
 
-cd tls
-# gen tls stuff
-git clone https://github.com/michaelklishin/tls-gen.git
-
-
-
-
-# fix server_key.pem
-
-openssl rsa -in tls/server_key.pem --out tls/server_key.pem
-
-
-
+# run server
+cargo run --bin pc-server -- --host 0.0.0.0:8080 --private-key keys/private_key.bin --public-key keys/public_key.bin
 ```

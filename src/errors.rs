@@ -23,4 +23,3 @@ pub fn socks_error(msg: impl ToString) -> RsocksError {
         msg: msg.to_string(),
     }
 }
-
