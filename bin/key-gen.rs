@@ -4,6 +4,6 @@ fn main() {
         .generate_keypair()
         .unwrap();
 
-    std::fs::write("keys/private_key.bin", key_pair.private).unwrap();
-    std::fs::write("keys/public_key.bin", key_pair.public).unwrap();
+    println!("private key: {}", base64::encode(key_pair.private));
+    println!("public  key: {}", base64::encode(key_pair.public));
 }

@@ -24,10 +24,10 @@ struct Args {
     host: String,
     /// Private key
     #[clap(long)]
-    private_key: PathBuf,
+    private_key: String,
     /// Public key
     #[clap(long)]
-    public_key: PathBuf,
+    public_key: String,
 }
 
 fn bad_request(msg: impl ToString) -> Response<Body> {
@@ -153,8 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     let addr: SocketAddr = args.host.parse().expect("can not parse host");
 
-    let private_key = load_identify(args.private_key)?;
-    let public_key = load_identify(args.public_key)?;
+    let private_key = load_identify(&args.private_key)?;
+    let public_key = load_identify(&args.public_key)?;
 
     let listener = TcpListener::bind(addr).await?;
 
