@@ -1,6 +1,5 @@
 use std::io::{self};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -9,13 +8,12 @@ use std::task::{Context, Poll};
 use clap::Parser;
 use hyper::body::HttpBody;
 use hyper::{service::service_fn, Body, Request, Response, Version};
-use snowstorm::NoiseStream;
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, error, info, Instrument};
 
-use postcard::utils::{load_identify, PATTERN};
+use postcard::secure_stream::{load_identify, SecureStream, DEST_ADDR};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -44,7 +42,7 @@ async fn proxy(mut req: Request<hyper::Body>) -> Result<Response<Body>, anyhow::
         return Ok(bad_request("not http2"));
     }
 
-    let host = req.headers().get("dest");
+    let host = req.headers().get(DEST_ADDR);
     if host.is_none() {
         return Ok(bad_request("no host"));
     }
@@ -153,8 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     let addr: SocketAddr = args.host.parse().expect("can not parse host");
 
-    let private_key = load_identify(&args.private_key)?;
-    let public_key = load_identify(&args.public_key)?;
+    let private_key = Arc::new(load_identify(&args.private_key)?);
+    let public_key = Arc::new(load_identify(&args.public_key)?);
 
     let listener = TcpListener::bind(addr).await?;
 
@@ -170,27 +168,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
         tokio::spawn(
             async move {
-                // The server needs a responder to handle handshake reqeusts from clients
-                let responder = snowstorm::Builder::new(PATTERN.parse().unwrap())
-                    .local_private_key(&privte_key_cloned)
-                    .remote_public_key(&public_key_cloned)
-                    .build_responder()
-                    .unwrap();
+                match SecureStream::handshake(
+                    socket,
+                    privte_key_cloned.as_ref(),
+                    public_key_cloned.as_ref(),
+                )
+                .await
+                {
+                    Ok(secured_stream) => {
+                        debug!("SecureStream handshake done");
+                        let ret = http.serve_connection(
+                            secured_stream,
+                            service_fn(|req| async move { proxy(req).await }),
+                        );
 
-                // Start handshaking
-                let secured_stream = NoiseStream::handshake(socket, responder).await.unwrap();
-
-                // let secured_stream = socket;
-
-                debug!("NoiseStream handshake done");
-
-                let ret = http.serve_connection(
-                    secured_stream,
-                    service_fn(|req| async move { proxy(req).await }),
-                );
-
-                if let Err(e) = ret.await {
-                    eprintln!("server connection error: {}", e);
+                        if let Err(e) = ret.await {
+                            error!("server connection error: {}", e);
+                        }
+                    }
+                    Err(err) => {
+                        error!("SecureStream handshake failed, {:?}", err);
+                    }
                 }
             }
             .instrument(tracing::info_span!("remote_addr", %remote_addr)),

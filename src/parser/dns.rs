@@ -237,6 +237,7 @@ pub fn parse_message(input: &[u8]) -> IResult<&[u8], Message> {
 }
 
 mod test {
+    #![allow(unused_imports)]
     use super::*;
 
     #[test]

@@ -1,23 +1,13 @@
-use std::io;
-use std::path::PathBuf;
-use std::pin::Pin;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::task::Poll;
 
 use bytes::BytesMut;
 use clap::Parser;
-
-use hyper::client::connect::{Connected, Connection as HyperConnection};
-use hyper::service::Service;
-use hyper::{Body, Client, Uri};
-use snowstorm::NoiseStream;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::tcp::OwnedWriteHalf;
-
-use std::net::SocketAddr;
-
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
+use hyper::{Body, Client};
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{BytesCodec, Framed, FramedParts, FramedRead};
 use tracing::{debug, error, info, trace, Instrument};
@@ -26,7 +16,7 @@ use postcard::codecs::socks5::*;
 use postcard::errors::*;
 use postcard::proto::socks5::consts::*;
 use postcard::proto::socks5::*;
-use postcard::utils::{load_identify, PATTERN};
+use postcard::secure_stream::{load_identify, NoiseConnector, DEST_ADDR};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -46,10 +36,6 @@ struct Args {
 
 type CmdFramed = Framed<TcpStream, CmdCodec>;
 
-fn error(err: String) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err)
-}
-
 fn dest_addr(req: &CmdRequest) -> Result<String, RsocksError> {
     let req = req.clone();
     match req.address {
@@ -60,162 +46,30 @@ fn dest_addr(req: &CmdRequest) -> Result<String, RsocksError> {
     }
 }
 
-struct MyStream {
-    inner: NoiseStream<TcpStream>,
-    // inner: TcpStream,
-}
-
-impl AsyncRead for MyStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
-    }
-}
-
-impl AsyncWrite for MyStream {
-    fn is_write_vectored(&self) -> bool {
-        AsyncWrite::is_write_vectored(&self.inner)
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
-    }
-
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf)
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<Result<usize, io::Error>> {
-        AsyncWrite::poll_write_vectored(Pin::new(&mut self.inner), cx, bufs)
-    }
-}
-
 #[derive(Clone)]
-struct NoiseConnector {
-    private_key: Arc<Vec<u8>>,
-    public_key: Arc<Vec<u8>>,
-}
-
-impl NoiseConnector {
-    pub fn new(private_key: Arc<Vec<u8>>, public_key: Arc<Vec<u8>>) -> Self {
-        NoiseConnector {
-            private_key,
-            public_key,
-        }
-    }
-}
-
-impl Service<Uri> for NoiseConnector {
-    type Response = MyStream;
-    type Error = anyhow::Error;
-    type Future = Pin<
-        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>,
-    >;
-
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Uri) -> Self::Future {
-        let NoiseConnector {
-            private_key,
-            public_key,
-        } = self.clone();
-
-        Box::pin(async move {
-            let authority = req
-                .authority()
-                .ok_or_else(|| error("uri not ok".to_string()))?;
-
-            let remote = format!(
-                "{}:{}",
-                authority.host(),
-                authority.port_u16().unwrap_or(8080)
-            );
-
-            debug!("try tcp connect to {:?}", &remote);
-
-            // Connect to the peer
-            let stream = TcpStream::connect(remote).await?;
-
-            debug!("tcp connect done");
-
-            // The client should build an initiator to launch the handshake process
-            let initiator = snowstorm::Builder::new(PATTERN.parse()?)
-                .local_private_key(&private_key)
-                .remote_public_key(&public_key)
-                .build_initiator()?;
-
-            // Start handshaking
-            let secured_stream = NoiseStream::handshake(stream, initiator).await?;
-
-            // let secured_stream = stream;
-
-            debug!("NoiseStream handshake done");
-
-            Ok(MyStream {
-                inner: secured_stream,
-            })
-        })
-    }
-}
-
-impl HyperConnection for MyStream {
-    fn connected(&self) -> Connected {
-        self.inner.get_inner().connected()
-        // self.inner.connected()
-    }
-}
-
-#[derive(Clone)]
-struct Connection {
+struct ProxyHandler {
     remote: String,
     http: hyper::Client<NoiseConnector, Body>,
 }
 
-impl Connection {
+impl ProxyHandler {
     pub fn new(remote: impl ToString, http: hyper::Client<NoiseConnector, Body>) -> Self {
-        Connection {
+        ProxyHandler {
             remote: remote.to_string(),
             http,
         }
     }
 
-    pub async fn proxy(&mut self, socket: TcpStream) -> Result<(), anyhow::Error> {
-        let cmd = self.handshake(socket).await?;
+    pub async fn handshake(
+        &mut self,
+        socket: TcpStream,
+    ) -> Result<(Option<Body>, OwnedWriteHalf), anyhow::Error> {
+        let cmd = self.accept_socks5(socket).await?;
 
-        let (body, write_half) = self.socks5_cmd(cmd).await?;
-
-        Self::streaming(body, write_half).await?;
-
-        Ok(())
+        self.connect_dest(cmd).await.map_err(Into::into)
     }
 
-    async fn handshake(&self, socket: TcpStream) -> Result<CmdFramed, RsocksError> {
+    async fn accept_socks5(&self, socket: TcpStream) -> Result<CmdFramed, RsocksError> {
         let (framed, mut stream) = Framed::new(socket, HandshakeCodec).into_future().await;
         let req = match framed {
             Some(req) => req,
@@ -246,7 +100,7 @@ impl Connection {
         Ok(cmd)
     }
 
-    async fn socks5_cmd(
+    async fn connect_dest(
         &mut self,
         stream: CmdFramed,
     ) -> Result<(Option<Body>, OwnedWriteHalf), RsocksError> {
@@ -279,7 +133,7 @@ impl Connection {
         let h2_req = hyper::Request::builder()
             .version(hyper::http::Version::HTTP_2)
             .uri(&self.remote)
-            .header("dest", addr)
+            .header(DEST_ADDR, addr)
             .body(Body::wrap_stream(stream))
             .unwrap();
 
@@ -368,13 +222,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     loop {
         let (socket, remote_addr) = listener.accept().await.expect("accpet failed");
 
-        let mut conn = Connection::new(url.clone(), http_client.clone());
+        let mut conn = ProxyHandler::new(url.clone(), http_client.clone());
 
         tokio::spawn(
             async move {
-                match conn.proxy(socket).await {
-                    Ok(_) => {}
-                    Err(e) => error!("socks5 proxy error, {:?}", e),
+                match conn.handshake(socket).await {
+                    Ok((body, write_half)) => {
+                        match ProxyHandler::streaming(body, write_half).await {
+                            Ok(_) => {
+                                info!("proxy streaming done")
+                            }
+                            Err(err) => {
+                                error!("proxy streaming error, {:?}", err);
+                            }
+                        }
+                    }
+                    Err(e) => error!("proxy handshake error, {:?}", e),
                 }
             }
             .instrument(tracing::info_span!("conn", %remote_addr)),

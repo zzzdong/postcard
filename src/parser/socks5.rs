@@ -173,6 +173,8 @@ mod test {
     }
 
     mod tcprequesthdr {
+        #![allow(dead_code)]
+
         use super::*;
 
         #[test]

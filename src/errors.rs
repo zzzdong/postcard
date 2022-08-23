@@ -23,3 +23,7 @@ pub fn socks_error(msg: impl ToString) -> RsocksError {
         msg: msg.to_string(),
     }
 }
+
+pub fn new_error(err: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, err)
+}
