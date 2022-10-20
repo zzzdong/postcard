@@ -4,7 +4,7 @@ use postcard;
 #[derive(Parser, Debug)]
 struct Args {
     /// Host to listen on
-    #[clap(long, short, default_value = "0.0.0.0:1080")]
+    #[clap(long, default_value = "0.0.0.0:1080")]
     host: String,
     /// Server to connect to
     #[clap(long, short)]
