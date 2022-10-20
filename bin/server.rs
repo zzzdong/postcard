@@ -18,7 +18,7 @@ use postcard::secure_stream::{load_identify, SecureStream, DEST_ADDR};
 #[derive(Parser, Debug)]
 struct Args {
     /// Host to listen on
-    #[clap(long, short, default_value = "0.0.0.0:8080")]
+    #[clap(long, default_value = "0.0.0.0:8080")]
     host: String,
     /// Private key
     #[clap(long)]
