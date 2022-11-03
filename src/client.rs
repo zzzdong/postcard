@@ -46,13 +46,13 @@ pub async fn start_client(
         .unwrap_or_else(|e| panic!("can not bind {}, {:?}", addr, e));
 
     loop {
-        let (socket, income_addr) = listener.accept().await.expect("accpet failed");
+        let (socket, incoming) = listener.accept().await.expect("accpet failed");
 
         let mut conn = ProxyHandler::new(url.clone(), http_client.clone());
 
         tokio::spawn(
             async move { conn.handle(socket).await.unwrap() }
-                .instrument(info_span!("conn", %income_addr)),
+                .instrument(info_span!("accepted", %incoming)),
         );
     }
 }
@@ -88,7 +88,7 @@ impl ProxyHandler {
 
             Ok::<_, anyhow::Error>(())
         }
-        .instrument(info_span!("dest", %dest))
+        .instrument(info_span!("connect", %dest))
         .await
         .unwrap();
 
