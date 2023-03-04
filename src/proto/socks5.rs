@@ -67,7 +67,7 @@ impl Command {
             Command::TCPConnect => consts::SOCKS5_CMD_TCP_CONNECT,
             Command::TCPBind => consts::SOCKS5_CMD_TCP_BIND,
             Command::UDPAssociate => consts::SOCKS5_CMD_UDP_ASSOCIATE,
-            Command::OtherCommand(c) => c as u8,
+            Command::OtherCommand(c) => c,
         }
     }
 }

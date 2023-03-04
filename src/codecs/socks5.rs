@@ -57,7 +57,7 @@ impl Decoder for CmdCodec {
                 if e.is_incomplete() {
                     return Ok(None);
                 } else {
-                    return Err(parser_error(&format!("parse_cmd_request, {:?}", e)));
+                    return Err(parser_error(format!("parse_cmd_request, {:?}", e)));
                 }
             }
         };

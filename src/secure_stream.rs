@@ -1,5 +1,6 @@
 use std::{io, pin::Pin, sync::Arc, task::Poll};
 
+use base64::prelude::{Engine, BASE64_STANDARD};
 use hyper::client::connect::{Connected, Connection};
 use hyper::{service::Service, Uri};
 use snowstorm::NoiseStream;
@@ -18,7 +19,7 @@ pub static PATTERN: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 pub static DEST_ADDR: &str = "x-dest-addr";
 
 pub fn load_identify(key_str: &str) -> anyhow::Result<Vec<u8>> {
-    let identity = base64::decode(key_str)?;
+    let identity = BASE64_STANDARD.decode(key_str)?;
 
     Ok(identity)
 }

@@ -1,5 +1,4 @@
 use clap::Parser;
-use postcard;
 
 #[derive(Parser, Debug)]
 struct Args {
