@@ -34,5 +34,6 @@ jobs:
           # Note that glob pattern is not supported yet.
           bin: pc-client,pc-server
           archive: postcard-$target
+          target: ${{ matrix.target }}
           # (required) GitHub token for uploading assets to GitHub Releases.
           token: ${{ secrets.GITHUB_TOKEN }}
