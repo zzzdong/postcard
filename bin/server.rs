@@ -58,7 +58,9 @@ async fn proxy(mut req: Request<hyper::Body>) -> Result<Response<Body>, anyhow::
 
     let socket = TcpStream::connect(&dest).await?;
 
-    let (read_half, mut write_half) = socket.into_split();
+    debug!("connected to {}", dest);
+
+    let (read_half, mut write_half) = tokio::io::split(socket);
 
     tokio::spawn(
         async move {
@@ -154,7 +156,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     let private_key = Arc::new(load_identify(&args.private_key)?);
     let public_key = Arc::new(load_identify(&args.public_key)?);
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .expect(&format!("can not bind {}", addr));
+
+    info!("listening on {}", addr);
 
     let mut http = hyper::server::conn::Http::new();
 
@@ -163,18 +169,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     while let Ok((socket, remote_addr)) = listener.accept().await {
         let http = http.clone();
 
-        let privte_key_cloned = private_key.clone();
-        let public_key_cloned = public_key.clone();
+        let private_key_cloned = private_key.as_ref().clone();
+        let public_key_cloned = public_key.as_ref().clone();
 
         tokio::spawn(
             async move {
-                match SecureStream::handshake(
-                    socket,
-                    privte_key_cloned.as_ref(),
-                    public_key_cloned.as_ref(),
-                )
-                .await
-                {
+                match SecureStream::handshake(socket, private_key_cloned, public_key_cloned).await {
                     Ok(secured_stream) => {
                         debug!("SecureStream handshake done");
                         let ret = http.serve_connection(
