@@ -1,13 +1,17 @@
-use std::{io, pin::Pin, sync::Arc, task::Poll};
+use std::{pin::Pin, sync::Arc, task::Poll};
 
-use base64::prelude::{Engine, BASE64_STANDARD};
-use hyper::client::connect::{Connected, Connection};
-use hyper::{service::Service, Uri};
+use base64::{engine::general_purpose, Engine as _};
+use hyper::Uri;
+use hyper_util::{
+    client::legacy::connect::{Connected, Connection},
+    rt::TokioIo,
+};
 use snowstorm::NoiseStream;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+use tower::Service;
 use tracing::debug;
 
 use crate::errors::new_error;
@@ -19,73 +23,60 @@ pub static PATTERN: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 pub static DEST_ADDR: &str = "x-dest-addr";
 
 pub fn load_identify(key_str: &str) -> anyhow::Result<Vec<u8>> {
-    let identity = BASE64_STANDARD.decode(key_str)?;
+    let identity = general_purpose::STANDARD.decode(key_str)?;
 
     Ok(identity)
 }
 
-pub struct SecureStream<T> {
-    inner: NoiseStream<T>,
-}
+// pub struct SecureStream<T> {
+//     inner: NoiseStream<T>,
+// }
 
-impl<T> AsyncRead for SecureStream<T>
+pub struct SecureStream<T>(TokioIo<NoiseStream<T>>);
+
+impl<T> hyper::rt::Read for SecureStream<T>
 where
     T: AsyncRead + Unpin + 'static,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
+        buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        hyper::rt::Read::poll_read(Pin::new(&mut self.0), cx, buf)
     }
 }
 
-impl<T> AsyncWrite for SecureStream<T>
+impl<T> hyper::rt::Write for SecureStream<T>
 where
     T: AsyncWrite + Unpin + 'static,
 {
-    fn is_write_vectored(&self) -> bool {
-        AsyncWrite::is_write_vectored(&self.inner)
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        hyper::rt::Write::poll_write(Pin::new(&mut self.0), cx, buf)
     }
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
+    ) -> Poll<Result<(), std::io::Error>> {
+        hyper::rt::Write::poll_flush(Pin::new(&mut self.0), cx)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
-    }
-
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf)
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<Result<usize, io::Error>> {
-        AsyncWrite::poll_write_vectored(Pin::new(&mut self.inner), cx, bufs)
+    ) -> Poll<Result<(), std::io::Error>> {
+        hyper::rt::Write::poll_shutdown(Pin::new(&mut self.0), cx)
     }
 }
 
-impl<T> Connection for SecureStream<T>
-where
-    T: Connection,
-{
+impl Connection for SecureStream<TcpStream> {
     fn connected(&self) -> Connected {
-        self.inner.get_inner().connected()
+        Connected::new()
     }
 }
 
@@ -153,9 +144,7 @@ impl Service<Uri> for NoiseConnector {
 
             debug!("NoiseStream handshake done");
 
-            Ok(SecureStream {
-                inner: secured_stream,
-            })
+            Ok(SecureStream(TokioIo::new(secured_stream)))
         })
     }
 }
@@ -179,8 +168,6 @@ impl<T> SecureStream<T> {
         // Start handshaking
         let secured_stream = NoiseStream::handshake(socket, responder).await?;
 
-        Ok(SecureStream {
-            inner: secured_stream,
-        })
+        Ok(SecureStream(TokioIo::new(secured_stream)))
     }
 }
