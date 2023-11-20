@@ -29,13 +29,7 @@ futures = "0.3"
 futures-util = "0.3"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["full"] }
-hyper-util = { version = "0.1", features = [
-    "client",
-    "client-legacy",
-    "server",
-    "tokio",
-    "http2",
-] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http2"] }
 nom = "7"
 snowstorm = "0.4"
 thiserror = "1"

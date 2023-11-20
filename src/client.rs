@@ -192,9 +192,6 @@ impl ProxyHandler {
 
         let (read_half, mut write_half) = stream.into_inner().into_split();
 
-        // let stream =
-        //     FramedRead::new(read_half, BytesCodec::new()).map(|b| b.map(|b| Frame::data(b)));
-        // let body = StreamBody::new(stream);
         let body = BodyReader::new(read_half);
 
         let dest = dest_addr(&cmd)?;
