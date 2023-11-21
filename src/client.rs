@@ -1,25 +1,25 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
+use std::sync::Arc;
 
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use futures::{SinkExt, StreamExt};
-use http_body_util::BodyStream;
+use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper_util::client::legacy::Client as HttpClient;
-use tokio::{
-    io::AsyncWriteExt,
-    net::{tcp::OwnedWriteHalf, TcpStream},
-};
+use tokio::io::AsyncWriteExt;
+use tokio::net::{tcp::OwnedWriteHalf, TcpStream};
 use tokio_util::codec::{BytesCodec, Framed, FramedRead};
 use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use crate::{
     codecs::socks5::{CmdCodec, HandshakeCodec},
-    errors::{socks_error, RsocksError},
+    error::{socks_error, Error},
     proto::socks5::{
         consts::SOCKS5_AUTH_METHOD_NONE, Address, CmdRequest, CmdResponse, Command,
         HandshakeResponse, Reply,
     },
     secure_stream::{load_identify, NoiseConnector, DEST_ADDR},
+    BoxBody,
 };
 
 type CmdFramed = Framed<TcpStream, CmdCodec>;
@@ -29,7 +29,7 @@ pub async fn start_client(
     server: &str,
     private_key: &str,
     public_key: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), Error> {
     let addr: SocketAddr = host.parse().expect("can not parse host");
 
     let url = Uri::from_maybe_shared(format!("http://{}/", server)).expect("build uri failed");
@@ -104,18 +104,18 @@ async fn handle_incoming(
 #[derive(Clone, Debug)]
 struct ProxyHandler {
     remote: String,
-    http: HttpClient<NoiseConnector, BodyReader>,
+    http: HttpClient<NoiseConnector, BoxBody>,
 }
 
 impl ProxyHandler {
-    pub fn new(remote: impl ToString, http: HttpClient<NoiseConnector, BodyReader>) -> Self {
+    pub fn new(remote: impl ToString, http: HttpClient<NoiseConnector, BoxBody>) -> Self {
         ProxyHandler {
             remote,
             http_client,
         }
     }
 
-    pub async fn handle(&mut self, socket: TcpStream) -> Result<(), anyhow::Error> {
+    pub async fn handle(&mut self, socket: TcpStream) -> Result<(), Error> {
         let (cmd, stream) = self.accept_socks5(socket).await?;
 
         let dest = dest_addr(&cmd)?;
@@ -130,7 +130,7 @@ impl ProxyHandler {
                 }
             };
 
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, Error>(())
         }
         .instrument(info_span!("connect", %dest))
         .await
@@ -139,16 +139,13 @@ impl ProxyHandler {
         Ok(())
     }
 
-    async fn forward(&mut self, cmd: CmdRequest, stream: CmdFramed) -> Result<(), anyhow::Error> {
+    async fn forward(&mut self, cmd: CmdRequest, stream: CmdFramed) -> Result<(), Error> {
         let (body, write_half) = self.connect_dest(cmd, stream).await?;
 
         ProxyHandler::streaming(body, write_half).await
     }
 
-    async fn accept_socks5(
-        &self,
-        socket: TcpStream,
-    ) -> Result<(CmdRequest, CmdFramed), RsocksError> {
+    async fn accept_socks5(&self, socket: TcpStream) -> Result<(CmdRequest, CmdFramed), Error> {
         // handshake frame
         let mut stream = Framed::new(socket, HandshakeCodec);
 
@@ -179,7 +176,7 @@ impl ProxyHandler {
         &mut self,
         cmd: CmdRequest,
         mut stream: CmdFramed,
-    ) -> Result<(Incoming, OwnedWriteHalf), RsocksError> {
+    ) -> Result<(Incoming, OwnedWriteHalf), Error> {
         debug!("cmd request: {:?}", cmd);
         let CmdRequest { address, port, .. } = cmd.clone();
 
@@ -192,8 +189,10 @@ impl ProxyHandler {
 
         let (read_half, mut write_half) = stream.into_inner().into_split();
 
-        let body = BodyReader::new(read_half);
-
+        let body = FramedRead::new(read_half, BytesCodec::new());
+        let body = BodyExt::boxed(StreamBody::new(
+            body.map(|b| b.map(|b| Frame::data(b.freeze())).map_err(Into::into)),
+        ));
         let dest = dest_addr(&cmd)?;
 
         // use http2
@@ -236,7 +235,7 @@ impl ProxyHandler {
     async fn streaming(
         stream_body: Incoming,
         mut write_half: OwnedWriteHalf,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Error> {
         let mut stream = BodyStream::new(stream_body);
         while let Some(data) = stream.next().await {
             match data {
@@ -261,35 +260,12 @@ impl ProxyHandler {
     }
 }
 
-fn dest_addr(req: &CmdRequest) -> Result<String, RsocksError> {
+fn dest_addr(req: &CmdRequest) -> Result<String, Error> {
     let req = req.clone();
     match req.address {
         Address::IPv4(ip) => Ok(format!("{}:{}", ip, req.port)),
         Address::IPv6(ip) => Ok(format!("{}:{}", ip, req.port)),
         Address::DomainName(ref dn) => Ok(format!("{}:{}", dn, req.port)),
         Address::Unknown(_t) => Err(socks_error("bad address")),
-    }
-}
-
-struct BodyReader(FramedRead<tokio::net::tcp::OwnedReadHalf, BytesCodec>);
-
-impl BodyReader {
-    pub fn new(stream: tokio::net::tcp::OwnedReadHalf) -> Self {
-        BodyReader(FramedRead::new(stream, BytesCodec::new()))
-    }
-}
-
-impl hyper::body::Body for BodyReader {
-    type Data = Bytes;
-
-    type Error = anyhow::Error;
-
-    fn poll_frame(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        self.0
-            .poll_next_unpin(cx)
-            .map(|b| b.map(|b| b.map(|b| Frame::data(b.freeze())).map_err(Into::into)))
     }
 }

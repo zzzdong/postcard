@@ -8,7 +8,7 @@ use nom::number::complete::{be_u16, be_u32, be_u8};
 use nom::sequence::tuple;
 use nom::IResult;
 
-use crate::errors::RsocksError;
+use crate::error::Error;
 use crate::proto::dns::*;
 
 fn bit_flag(b: u8) -> bool {
@@ -28,10 +28,10 @@ impl<'a> Parser<'a> {
         Parser { packet: input }
     }
 
-    pub fn parse(&self) -> Result<Message, RsocksError> {
+    pub fn parse(&self) -> Result<Message, Error> {
         match parse_message(self.packet) {
             Ok((_, m)) => Ok(m),
-            Err(e) => Err(RsocksError::Parser {
+            Err(e) => Err(Error::Parser {
                 msg: format!("dns parser error: {:?}", e),
             }),
         }

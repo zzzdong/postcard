@@ -14,7 +14,7 @@ use tokio::{
 use tower::Service;
 use tracing::debug;
 
-use crate::errors::new_error;
+use crate::error::{new_error, Error};
 
 // Noise protocol params, see: http://www.noiseprotocol.org/noise.html#protocol-names-and-modifiers
 // Use `KK` to enable bidirectional identity verification
@@ -22,7 +22,7 @@ pub static PATTERN: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 
 pub static DEST_ADDR: &str = "x-dest-addr";
 
-pub fn load_identify(key_str: &str) -> anyhow::Result<Vec<u8>> {
+pub fn load_identify(key_str: &str) -> Result<Vec<u8>, Error> {
     let identity = general_purpose::STANDARD.decode(key_str)?;
 
     Ok(identity)
@@ -97,7 +97,7 @@ impl NoiseConnector {
 
 impl Service<Uri> for NoiseConnector {
     type Response = SecureStream<TcpStream>;
-    type Error = anyhow::Error;
+    type Error = Error;
     type Future = Pin<
         Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>,
     >;
@@ -154,7 +154,7 @@ impl<T> SecureStream<T> {
         socket: T,
         private_key: impl AsRef<[u8]>,
         public_key: impl AsRef<[u8]>,
-    ) -> Result<Self, anyhow::Error>
+    ) -> Result<Self, Error>
     where
         T: AsyncRead + AsyncWrite + Unpin + 'static,
     {
