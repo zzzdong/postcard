@@ -1,4 +1,4 @@
-use base64::prelude::{Engine, BASE64_STANDARD};
+use base64::{engine::general_purpose, Engine as _};
 
 fn main() {
     // Generate a private / public key pair
@@ -6,6 +6,12 @@ fn main() {
         .generate_keypair()
         .unwrap();
 
-    println!("private key: {}", BASE64_STANDARD.encode(key_pair.private));
-    println!("public  key: {}", BASE64_STANDARD.encode(key_pair.public));
+    println!(
+        "private key: {}",
+        general_purpose::STANDARD.encode(key_pair.private)
+    );
+    println!(
+        "public  key: {}",
+        general_purpose::STANDARD.encode(key_pair.public)
+    );
 }

@@ -3,7 +3,7 @@ use nom::Offset;
 use tokio_util::codec::*;
 use tracing::trace;
 
-use crate::errors::*;
+use crate::error::*;
 use crate::parser::socks5::*;
 use crate::proto::socks5::*;
 use crate::proto::WriteBuf;
@@ -13,9 +13,9 @@ pub struct HandshakeCodec;
 
 impl Decoder for HandshakeCodec {
     type Item = HandshakeRequest;
-    type Error = RsocksError;
+    type Error = Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<HandshakeRequest>, RsocksError> {
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<HandshakeRequest>, Error> {
         let (consumed, f) = match parse_handshake_request(buf) {
             Ok((i, packet)) => (buf.offset(i), packet),
             Err(e) => {
@@ -35,9 +35,9 @@ impl Decoder for HandshakeCodec {
 }
 
 impl Encoder<HandshakeResponse> for HandshakeCodec {
-    type Error = RsocksError;
+    type Error = Error;
 
-    fn encode(&mut self, packet: HandshakeResponse, buf: &mut BytesMut) -> Result<(), RsocksError> {
+    fn encode(&mut self, packet: HandshakeResponse, buf: &mut BytesMut) -> Result<(), Error> {
         packet.write_buf(buf);
         Ok(())
     }
@@ -48,9 +48,9 @@ pub struct CmdCodec;
 
 impl Decoder for CmdCodec {
     type Item = CmdRequest;
-    type Error = RsocksError;
+    type Error = Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<CmdRequest>, RsocksError> {
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<CmdRequest>, Error> {
         let (consumed, f) = match parse_cmd_request(buf) {
             Ok((i, packet)) => (buf.offset(i), packet),
             Err(e) => {
@@ -70,9 +70,9 @@ impl Decoder for CmdCodec {
 }
 
 impl Encoder<CmdResponse> for CmdCodec {
-    type Error = RsocksError;
+    type Error = Error;
 
-    fn encode(&mut self, packet: CmdResponse, buf: &mut BytesMut) -> Result<(), RsocksError> {
+    fn encode(&mut self, packet: CmdResponse, buf: &mut BytesMut) -> Result<(), Error> {
         packet.write_buf(buf);
         Ok(())
     }
