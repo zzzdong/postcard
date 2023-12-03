@@ -7,3 +7,5 @@ pub mod secure_stream;
 pub mod server;
 
 pub type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, crate::error::Error>;
+pub type UnsyncBoxBody =
+    http_body_util::combinators::UnsyncBoxBody<bytes::Bytes, crate::error::Error>;

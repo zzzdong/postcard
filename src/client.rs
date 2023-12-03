@@ -3,14 +3,19 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use futures::{SinkExt, StreamExt};
-use http_body_util::{BodyExt, BodyStream, StreamBody};
+use http_body_util::{BodyExt, BodyStream, Empty, StreamBody};
 use hyper::body::{Frame, Incoming};
+use hyper::header::HeaderValue;
+use hyper::server::conn::http1::Builder;
+use hyper::{Method, Request, Response, Uri};
 use hyper_util::client::legacy::Client as HttpClient;
+use hyper_util::rt::TokioIo;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{tcp::OwnedWriteHalf, TcpStream};
 use tokio_util::codec::{BytesCodec, Framed, FramedRead};
 use tracing::{debug, error, info, info_span, trace, Instrument};
 
+use crate::UnsyncBoxBody;
 use crate::{
     codecs::socks5::{CmdCodec, HandshakeCodec},
     error::{socks_error, Error},
@@ -41,26 +46,31 @@ pub async fn start_client(
 
     let http_client = HttpClient::builder(hyper_util::rt::TokioExecutor::new())
         .http2_only(true)
-        .build(connector);
+        .build(connector.clone());
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .expect(&format!("can not bind {}", addr));
+        .unwrap_or_else(|_| panic!("can not bind {}", addr));
 
     info!("listening on {}", addr);
 
-    let socks5_proxy = ProxyHandler::new(http_client.clone(), url.clone());
+    let socks5_proxy = ProxyHandler::new(url.clone(), http_client.clone());
 
-    let http = hyper::server::conn::Http::new();
-    let http_proxy = HttpProxyHandler::new(http, http_client.clone(), url.clone());
+    let http = hyper::server::conn::http1::Builder::new();
+
+    let unsync_http_client = HttpClient::builder(hyper_util::rt::TokioExecutor::new())
+        .http2_only(true)
+        .build(connector);
+    let http_proxy = HttpProxyHandler::new(http, unsync_http_client.clone(), url.clone());
 
     loop {
         let (socket, incoming) = listener.accept().await.expect("accpet failed");
 
-        let mut conn: ProxyHandler = ProxyHandler::new(url.clone(), http_client.clone());
+        let socks5_proxy_cloned = socks5_proxy.clone();
+        let http_proxy_cloned = http_proxy.clone();
 
         tokio::spawn(async move {
-            match handle_incoming(socket, socks5_proxy, http_proxy)
+            match handle_incoming(socket, socks5_proxy_cloned, http_proxy_cloned)
                 .instrument(info_span!("accepted", %incoming))
                 .await
             {
@@ -79,7 +89,7 @@ async fn handle_incoming(
     socket: TcpStream,
     mut socks5: ProxyHandler,
     http_handler: HttpProxyHandler,
-) -> anyhow::Result<()> {
+) -> Result<(), Error> {
     let mut buf = [0u8; 3];
     let _n = socket.peek(&mut buf).await?;
 
@@ -93,7 +103,7 @@ async fn handle_incoming(
         debug!("start http proxy");
         http_handler
             .http
-            .serve_connection(socket, http_handler.clone())
+            .serve_connection(TokioIo::new(socket), http_handler.clone())
             .with_upgrades()
             .await?;
 
@@ -110,8 +120,8 @@ struct ProxyHandler {
 impl ProxyHandler {
     pub fn new(remote: impl ToString, http: HttpClient<NoiseConnector, BoxBody>) -> Self {
         ProxyHandler {
-            remote,
-            http_client,
+            remote: remote.to_string(),
+            http,
         }
     }
 
@@ -232,10 +242,7 @@ impl ProxyHandler {
             .map(|body| (body, write_half))
     }
 
-    async fn streaming(
-        stream_body: Incoming,
-        mut write_half: OwnedWriteHalf,
-    ) -> Result<(), Error> {
+    async fn streaming(stream_body: Incoming, mut write_half: OwnedWriteHalf) -> Result<(), Error> {
         let mut stream = BodyStream::new(stream_body);
         while let Some(data) = stream.next().await {
             match data {
@@ -267,5 +274,119 @@ fn dest_addr(req: &CmdRequest) -> Result<String, Error> {
         Address::IPv6(ip) => Ok(format!("{}:{}", ip, req.port)),
         Address::DomainName(ref dn) => Ok(format!("{}:{}", dn, req.port)),
         Address::Unknown(_t) => Err(socks_error("bad address")),
+    }
+}
+
+#[derive(Clone)]
+struct HttpProxyHandler {
+    http: Builder,
+    client: HttpClient<NoiseConnector, UnsyncBoxBody>,
+    remote: Uri,
+}
+
+impl HttpProxyHandler {
+    fn new(http: Builder, client: HttpClient<NoiseConnector, UnsyncBoxBody>, remote: Uri) -> Self {
+        HttpProxyHandler {
+            http,
+            client,
+            remote,
+        }
+    }
+}
+
+impl hyper::service::Service<Request<Incoming>> for HttpProxyHandler {
+    type Response = Response<BoxBody>;
+
+    type Error = Error;
+
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>,
+    >;
+
+    fn call(&self, mut req: Request<Incoming>) -> Self::Future {
+        let host = req.uri().authority().map(|auth| auth.to_string());
+
+        let dest = host.expect("failed to get dest");
+
+        match req.method() {
+            &Method::CONNECT => {
+                let remote = self.remote.clone();
+                let client = self.client.clone();
+
+                tokio::task::spawn(async move {
+                    match hyper::upgrade::on(req).await {
+                        Ok(upgraded) => {
+                            let upgraded: TokioIo<hyper::upgrade::Upgraded> =
+                                TokioIo::new(upgraded);
+
+                            let (read_half, mut write_half) = tokio::io::split(upgraded);
+
+                            let framed = FramedRead::new(read_half, BytesCodec::new());
+                            let body =
+                                BodyExt::boxed_unsync(StreamBody::new(framed.map(|b| {
+                                    b.map(|b| Frame::data(b.freeze())).map_err(Into::into)
+                                })));
+                            // use http2
+                            let h2_req = hyper::Request::builder()
+                                .version(hyper::http::Version::HTTP_2)
+                                .uri(&remote)
+                                .header(DEST_ADDR, &dest)
+                                .body(body)
+                                .unwrap();
+
+                            match client.request(h2_req).await {
+                                Ok(resp) => {
+                                    let mut body = resp.into_body();
+
+                                    while let Some(frame) = body.frame().await {
+                                        match frame {
+                                            Ok(frame) => {
+                                                if frame.is_data() {
+                                                    if let Err(err) = write_half
+                                                        .write_buf(&mut frame.into_data().unwrap())
+                                                        .await
+                                                    {
+                                                        error!(%err, "send body buf failed");
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                            Err(err) => {
+                                                error!(%err, "recv body data failed");
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    error!(%err, %remote, "proxy failed");
+                                }
+                            }
+                        }
+
+                        Err(e) => error!("upgrade error: {}", e),
+                    }
+                });
+
+                Box::pin(async move { Ok(Response::new(Empty::new().map_err(Into::into).boxed())) })
+            }
+            _ => {
+                *req.uri_mut() = self.remote.clone();
+                *req.version_mut() = hyper::Version::HTTP_2;
+                req.headers_mut().append(
+                    DEST_ADDR,
+                    HeaderValue::from_maybe_shared(dest).expect("dest header failed"),
+                );
+
+                let client = self.client.clone();
+                Box::pin(async move {
+                    let resp = client
+                        .request(req.map(|body| body.map_err(Into::into).boxed_unsync()))
+                        .await
+                        .map(|resp| resp.map(|body| body.map_err(Into::into).boxed()));
+                    resp.map_err(Into::into)
+                })
+            }
+        }
     }
 }

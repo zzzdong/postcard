@@ -18,6 +18,8 @@ pub enum Error {
     Snow(#[from] snowstorm::snow::Error),
     #[error("Snowstorm error: {}", 0)]
     Snowstorm(#[from] snowstorm::SnowstormError),
+    #[error("hyper client error: {}", 0)]
+    Client(#[from] hyper_util::client::legacy::Error),
 }
 
 pub fn parser_error(msg: impl ToString) -> Error {
