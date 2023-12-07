@@ -22,6 +22,8 @@ pub static PATTERN: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 
 pub static DEST_ADDR: &str = "x-dest-addr";
 
+pub static PROXY_METHOD: &str = "x-proxy-method";
+
 pub fn load_identify(key_str: &str) -> Result<Vec<u8>, Error> {
     let identity = general_purpose::STANDARD.decode(key_str)?;
 

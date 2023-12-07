@@ -1,6 +1,6 @@
 [package]
 name = "postcard"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 edition = "2021"
 
 
@@ -28,7 +28,7 @@ futures = "0.3"
 futures-util = "0.3"
 http-body-util = "0.1"
 hyper = { version = "1.0", features = ["full"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http2"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1", "http2"] }
 nom = "7"
 snowstorm = "0.4"
 thiserror = "1"

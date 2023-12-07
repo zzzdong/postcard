@@ -1,8 +1,8 @@
-use std::io::{self};
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
@@ -10,6 +10,8 @@ use futures::StreamExt;
 use http_body_util::{BodyExt, BodyStream, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::{service::service_fn, Request, Response, Version};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client as HttpClient;
 use hyper_util::rt::TokioExecutor;
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
@@ -17,8 +19,19 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, error, info, Instrument};
 
 use crate::error::Error;
-use crate::secure_stream::{load_identify, SecureStream, DEST_ADDR};
+use crate::secure_stream::{load_identify, SecureStream, DEST_ADDR, PROXY_METHOD};
 use crate::BoxBody;
+
+fn get_http_client() -> HttpClient<HttpConnector, Incoming> {
+    static HTTP_CLIENT: OnceLock<HttpClient<HttpConnector, Incoming>> = OnceLock::new();
+
+    HTTP_CLIENT
+        .get_or_init(|| {
+            let connector = HttpConnector::new();
+            HttpClient::builder(hyper_util::rt::TokioExecutor::new()).build(connector)
+        })
+        .clone()
+}
 
 fn bad_request(msg: impl ToString) -> Response<BoxBody> {
     Response::builder()
@@ -41,6 +54,18 @@ async fn proxy(req: Request<Incoming>) -> Result<Response<BoxBody>, Error> {
     let host = req.headers().get(DEST_ADDR);
     if host.is_none() {
         return Ok(bad_request("no host"));
+    }
+
+    let proxy_method = req.headers().get(PROXY_METHOD);
+    if proxy_method.is_some() {
+        let dest = String::from_utf8(host.unwrap().as_bytes().to_vec()).unwrap();
+        let mut req = req;
+        *req.uri_mut() = hyper::Uri::from_maybe_shared(dest).unwrap();
+        *req.version_mut() = Version::HTTP_11;
+        let http_client = get_http_client();
+        let resp = http_client.request(req).await?;
+        let resp = resp.map(|body| body.map_err(Into::into).boxed());
+        return Ok(resp);
     }
 
     let send_count = Arc::new(AtomicUsize::new(0));

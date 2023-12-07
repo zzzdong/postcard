@@ -15,6 +15,7 @@ use tokio::net::{tcp::OwnedWriteHalf, TcpStream};
 use tokio_util::codec::{BytesCodec, Framed, FramedRead};
 use tracing::{debug, error, info, info_span, trace, Instrument};
 
+use crate::secure_stream::PROXY_METHOD;
 use crate::UnsyncBoxBody;
 use crate::{
     codecs::socks5::{CmdCodec, HandshakeCodec},
@@ -304,12 +305,11 @@ impl hyper::service::Service<Request<Incoming>> for HttpProxyHandler {
     >;
 
     fn call(&self, mut req: Request<Incoming>) -> Self::Future {
-        let host = req.uri().authority().map(|auth| auth.to_string());
+        let dest = req.uri().to_string();
 
-        let dest = host.expect("failed to get dest");
-
-        match req.method() {
-            &Method::CONNECT => {
+        let method = req.method().clone();
+        match method {
+            Method::CONNECT => {
                 let remote = self.remote.clone();
                 let client = self.client.clone();
 
@@ -370,12 +370,17 @@ impl hyper::service::Service<Request<Incoming>> for HttpProxyHandler {
 
                 Box::pin(async move { Ok(Response::new(Empty::new().map_err(Into::into).boxed())) })
             }
-            _ => {
+            method => {
                 *req.uri_mut() = self.remote.clone();
                 *req.version_mut() = hyper::Version::HTTP_2;
                 req.headers_mut().append(
                     DEST_ADDR,
                     HeaderValue::from_maybe_shared(dest).expect("dest header failed"),
+                );
+                req.headers_mut().append(
+                    PROXY_METHOD,
+                    HeaderValue::from_maybe_shared(method.as_str().to_string())
+                        .expect("dest header failed"),
                 );
 
                 let client = self.client.clone();
