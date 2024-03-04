@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::BytesMut;
@@ -36,10 +35,6 @@ pub async fn start_client(
     private_key: &str,
     public_key: &str,
 ) -> Result<(), Error> {
-    let addr: SocketAddr = host.parse().expect("can not parse host");
-
-    let url = Uri::from_maybe_shared(format!("http://{}/", server)).expect("build uri failed");
-
     let private_key = load_identify(private_key)?;
     let public_key = load_identify(public_key)?;
 
@@ -49,11 +44,13 @@ pub async fn start_client(
         .http2_only(true)
         .build(connector.clone());
 
-    let listener = tokio::net::TcpListener::bind(addr)
+    let listener = tokio::net::TcpListener::bind(host)
         .await
-        .unwrap_or_else(|_| panic!("can not bind {}", addr));
+        .unwrap_or_else(|_| panic!("can not bind {}", host));
 
-    info!("listening on {}", addr);
+    info!("listening on {}", host);
+
+    let url = Uri::from_maybe_shared(format!("http://{}/", server)).expect("build uri failed");
 
     let socks5_proxy = ProxyHandler::new(url.clone(), http_client.clone());
 

@@ -1,5 +1,4 @@
 use std::io;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -170,12 +169,10 @@ where
 }
 
 pub async fn start_server(host: &str, private_key: &str, public_key: &str) -> Result<(), Error> {
-    let addr: SocketAddr = host.parse().expect("can not parse host");
-
     let private_key = Arc::new(load_identify(private_key)?);
     let public_key = Arc::new(load_identify(public_key)?);
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(host).await?;
 
     let http = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
 
