@@ -376,7 +376,7 @@ impl hyper::service::Service<Request<Incoming>> for HttpProxyHandler {
                 );
                 req.headers_mut().append(
                     PROXY_METHOD,
-                    HeaderValue::from_maybe_shared(method.as_str().to_string())
+                    HeaderValue::from_str(method.as_str())
                         .expect("dest header failed"),
                 );
 

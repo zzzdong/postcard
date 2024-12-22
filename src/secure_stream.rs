@@ -11,7 +11,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-use tower::Service;
+use tower_service::Service;
 use tracing::debug;
 
 use crate::error::{new_error, Error};

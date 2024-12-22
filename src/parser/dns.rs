@@ -24,7 +24,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(input: &'a [u8]) -> Parser {
+    pub fn new(input: &'a [u8]) -> Self {
         Parser { packet: input }
     }
 

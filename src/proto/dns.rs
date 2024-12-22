@@ -357,7 +357,7 @@ pub fn write_domain_name(buf: &mut BytesMut, domain: &str) {
     let parts = domain.split('.');
 
     for p in parts {
-        buf.put_u8(p.as_bytes().len() as u8);
+        buf.put_u8(p.len() as u8);
         buf.put(p.as_bytes());
     }
 
